@@ -1,0 +1,248 @@
+###############Packages###############
+library(nimble)
+###############Code###############
+CodeNimble <- nimbleCode({
+  #Starting with the process model:
+  # All Notacion is described in the REF any auxiliar parameter is described
+  # during the code
+  # To improve the performance of MCMC, the total number of fish is relative to
+  ##abundance in the 1st year
+  # aphi[] parameter of phi[](x1000 for numerical stability)#
+  
+  N[1] <- 1         # Abundance first year
+  R[1] <- 0         # No recruits in first time-step
+  N0   <- 10000000  # Initial size of the populacion
+  
+  #For the first year:
+  for (i in 1:Class) {
+    aphi[1, i] <- mu_phi[i] * 1000
+  }
+  
+  # Population Total=(Survivors of last year + Recruits entry this year)
+  #small constants ate added to get rid of numerical problem
+  for (t in 1:Year) {
+    N[t + 1] <-  S[t] * (N[t] + 0.000001) + R[t + 1]
+    S[t] ~ dbeta(shape1 =  p[t] * ((p[t] * (1 - p[t])) / (0.005 ^ 2) - 1),
+                 shape2 = (1 - p[t]) * ((p[t] * (1 - p[t])) / (0.005 ^ 2) - 1))
+    p[t] <-
+      min(sum(Pi.S[t, 1:Class] * Phi[t, 1:Class]), 0.99999) #Average survival
+    q[t] <- sum(Pi.C[t, 1:Class])         #Avarege caugth
+    R[t + 1] <- Eggs[t] * Egg_surv + 0.0000001
+  }
+  
+  #Update of the distribution of individueal per size-class at each year
+  #Rratio[] Ratio of recruits in the next time step
+  #phiR[] Size-class  distribution of recruits
+  
+  for (t in 1:Year) {
+    Rratio[t + 1] <- R[t + 1] / N[t + 1]
+    for (i in 1:Class) {
+      aphi[t + 1, i] <-
+        ((1 - Rratio[t + 1]) * PhiG[t, i] + Rratio[t + 1] * PhiR[i] + 0.00001)
+    }
+    Phi[t, 1:Class] ~ ddirch(aphi[t, 1:Class])
+  }
+  ##############################################################################
+  ##########Recrutment and reproduction  ##########
+
+  for (t in 1:Year) {
+    Eggs[t] <- inprod(eggs_class[1:Class], Phi[t, 1:Class]) * N[t]
+  }
+  for (i in 1:Class) {
+    eggs_class[i] <- Fem[i] * Fec[i] * Mat[i]
+    
+    Fem[i] <- ilogit(Fem.Logit[i])
+    Fem.Logit[i] ~ dnorm(-li.50.female * beta.F + beta.F * l[i], sd = Fem.Sd)
+    
+    
+    Mat[i] <- ilogit(Mat.Logit[i])
+    Mat.Logit[i] ~ dnorm(-li.50.mature * beta.M + beta.M * l[i], sd = Mat.Sd)
+    
+    
+    Fec[i] ~ dlnorm(log((l[i] ^ b / exp(a)) / sqrt(1 - 0.8 ^ 2)), 
+                    sdlog =  sqrt(log(Fec.Cv ^ 2 + 1)))
+  }
+  Fem.Sd ~ dgamma(shape = 196, scale = 0.007)
+  Mat.Sd ~ dgamma(shape = 196, scale = 0.007)
+  Fec.Cv ~ dunif(0.0001, 1)
+  li.50.mature ~ dnorm(34, sd = 1)
+  beta.M ~ dnorm(0.5, sd = 0.3)
+  li.50.female ~ dnorm(29, sd = 1)
+  beta.F ~ dnorm(0.2, sd = 0.06)
+  a ~ dnorm(9.3, sd = 1)
+  b ~ dnorm(6.9, sd = 1)
+  ##############################################################################
+  ###########Mortalitya and Survival##########
+  #aphiS(c)parameters for the PhiS(C)
+  for (t in 1:Year) {
+    for (i in 1:Class) {
+      Z[t, i] <- Mort[i] + Fish[t, i]
+      Fish[t, i] <- F.max[t] * Sele[i]
+      Pi.S[t, i] <- exp(-Z[t, i])
+      Pi.C[t, i] <- (1 - exp(-Z[t, i])) * Fish[t, i] / Z[t, i]
+      aphiS[t, i] <- ((Pi.S[t, i] * Phi[t, i]) + .00001)
+    }
+    PhiS[t, 1:Class] ~ ddirch(aphiS[t, 1:Class])
+  }
+  
+  Mort[1] <- 0.25
+  for (i in 2:Class) {
+    Mort[i] ~ dlnorm(log((k * (l[i] / L.inf) ^ (-1.5)) / sqrt(D.Cv ^ 2 + 1)), 
+                     log(D.Cv ^ 2 + 1))
+  }
+  
+  for (i in 1:Class) {
+    Sele[i] <- ilogit(f.Logit[i])
+    f.Logit[i] ~ dnorm(-beta.f * li.50.sele + beta.f * l[i], sd = f.Sd)
+  }
+  for (t in 1:Year) {
+    F.max[t] ~ dlnorm(log(F.max.Mu / sqrt(F.max.Cv ^ 2 + 1)),
+                      sdlog =  sqrt(log(F.max.Cv ^ 2 + 1)))
+    
+  }
+  F.max.Mu ~ dlnorm(log(0.4), sdlog = 0.25)
+  F.max.Cv ~ dunif(0.0001, 1)
+  D.Cv ~ dunif(0.0001, 1)
+  beta.f ~ dnorm(0.35, sd = 0.1)
+  li.50.sele ~  dnorm(31, sd = 1)
+  f.Sd ~ dgamma(shape = 196, scale = 0.007)
+ ##############################################################################
+###########Growing  ##########
+  #gr[]parametr of g[]
+  #aphiG parameter of PhiG[]
+  
+  k ~ dunif(0.09, 0.15)
+  L.inf ~ dnorm(57, sd = 3)
+  
+  
+  for (i in 1:Class) {
+    for (j in 1:Class) {
+      gr[i, j] <-
+        (phi((I[j + 1] - ((L.inf - l[i]) * (1 - exp(-k)) + l[i]
+        )) / L.Sigma) -
+          phi((I[j] - ((L.inf - l[i]) * (1 - exp(-k)) + l[i]
+          )) / L.Sigma)) /
+        (phi((I[Class + 1] - ((L.inf - l[i]) * (1 - exp(-k)) + l[i]
+        )) / L.Sigma) -
+          phi((I[1] - ((L.inf - l[i]) * (1 - exp(-k)) + l[i]
+          )) / L.Sigma)) + 0.0001
+    }
+  }
+  
+  for (i in 1:Class) {
+    g[i, 1:Class] ~ ddirch(gr[i, 1:Class])
+  }
+  
+  for (t in 1:Year) {
+    for (i in 1:Class) {
+      for (j in 1:Class) {
+        aphiG[t, j, i] <- PhiS[t, j] * g[j, i]
+      }
+      PhiG[t, i] <- sum(aphiG[t, 1:Class, i])
+    }
+  }
+  
+  ####################################################
+  ####Observation model
+  #####################################################
+  for (t in 1:Year) {
+    for (i in 1:Class) {
+      Cathe[t, i] <- Pi.C[t, i] * N[t] * Phi[t, i] * N0
+      DD[t, i] ~ dnorm(Cathe[t, i] + 2, sd = sigma_obs[i])
+    }
+    age_dist_obs[t, 1:Class] ~ dmulti(Pi.C[t, 1:Class], 10000)
+  }
+})#END OF NIMBLE CODE FUNCTION
+
+################################################################################
+###Constants:
+################################################################################
+#From the dataset
+Year <- 8
+Class <- 10
+I <- seq(11, 61 , by = 5)
+l <- seq(13, 61, by = 5)
+#General Dynamics
+mu_phi <- c(rep(1 / Class, Class))
+#Reproduction and Recruitment
+PhiR <- c(1, rep(0, Class - 1))
+Egg_surv <- 0.000001
+#Mortality and Survival
+#Growth
+L.Sigma <- 1
+#Observational
+sigma_obs <-
+  c(rep(10, 2), rep(1000, 2), rep(10000, 2), rep(1000, 2), rep(100, 2))
+
+
+ImputConsts <-
+  tibble::lst(Year, Class, I, l,
+              mu_phi, 
+              PhiR, Egg_surv,
+              L.Sigma, 
+              sigma_obs)
+
+################################################################################
+######Set the data:####
+################################################################################
+#DD is a data-frame where witch row is and each collum is REF
+#age_dist_obs has the same stucture but with the age distribution multiplying 
+##by 10000
+ImputData <- tibble::lst(age_dist_obs, DD)
+
+################################################################################
+######Initial values####
+################################################################################
+#General Dynamics
+Phi <- PhiS <- matrix(rep(rep(1 / Class, Class), Year), Year)
+#Reproduction and Recruitment
+li.50.female <- 29
+beta.F <- 0.2
+li.50.mature <- 34
+beta.M <- 0.5
+a <- 9.3
+b <- 6.9
+Fec.Cv <- 0.5
+Mat.Logit <- Fem.Logit <- c(rep(-1, 5), rep(1, 5))
+Fec <- rep(10000000, Class)
+Fem.Sd <- Mat.Sd <- 1.4
+#Mortality and Survival
+F.max.Mu <- 0.4
+F.max.Cv <- 0.5
+li.50.sele <- 31
+beta.f <- 0.35
+f.Sd <- 1.4
+S <- rep(0.7, Year)
+D.Cv <- 0.5
+F.max <- c(rep(0.4, Year))
+f.Logit <- rep(1, Class)
+Mort <- c(rep(0.2, Class))
+#Growth
+k <- 0.11
+L.inf <- 57
+g <- matrix(rep(rep(1 / Class, Class), Class), Class)
+
+ImputInits <- tibble::lst(
+  Phi, PhiS,
+  li.50.female,beta.F,li.50.mature , beta.M,a ,b ,Fec.Cv,Mat.Logit, 
+  Fem.Logit,Fec ,Fem.Sd, Mat.Sd ,
+  F.max.Mu , F.max.Cv ,li.50.sele ,beta.f ,f.Sd ,S ,D.Cv, F.max, f.Logit,Mort ,
+  k ,  L.inf , g
+)
+
+################################################################################
+####RUN MODEL###
+################################################################################
+mcmc.out <-  nimbleMCMC(
+    code = CodeforNimble,
+    constants = ImputConsts,
+    inits = ImputInits,
+    data = ImputData,
+    thin = 1000,    niter = 11000000,    nchains = 5,    nburnin = 1000000,
+    summary = TRUE,
+    WAIC = TRUE,
+    monitors = c('S','Phi','f.Logit','beta.f','li.50.sele','f.Sd','F.max',
+                 'F.max.Mu','F.max.Cv','Mort', 'D.Cv','Fec', 'Fec.Cv','a','b',
+                 'li.50.mature','beta.M','Mat.Logit','Fem.Logit','beta.F',
+                 'li.50.female','Cathe','Pi.C','PhiS','PhiG','g','N','Eggs',
+                 'eggs_class', 'R','Fem.Sd','Mat.Sd','Pi.S','k','L.inf'))
