@@ -3,11 +3,9 @@ library(nimble)
 ###############Code###############
 CodeNimble <- nimbleCode({
   #Starting with the process model:
-  # All Notacion is described in the REF any auxiliar parameter is described
-  # during the code
-  # To improve the performance of MCMC, the total number of fish is relative to
-  ##abundance in the 1st year
-  # aphi[] parameter of phi[](x1000 for numerical stability)#
+  # All Notacion is described in the master thesis any auxiliar parameter is described during the code
+  # To improve the performance of MCMC, the total number of fish is relative to abundance in the 1st year
+  # aphi[] parameter of phi[](x1000 for numerical stability)
   
   N[1] <- 1         # Abundance first year
   R[1] <- 0         # No recruits in first time-step
